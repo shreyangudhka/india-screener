@@ -3,48 +3,48 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 
-st.set_page_config(page_title="Volume Surge Screener", page_icon="📊", layout="wide")
+st.set_page_config(page_title="RSI Reversal Screener", page_icon="📉", layout="wide")
 
-st.title("📊 Volume Surge Screener — Follow the Big Money")
-st.caption("When big institutions buy, volume explodes. This screener catches them in the act.")
+st.title("📉 RSI Reversal Screener — Buy the Dip")
+st.caption("Finds strong stocks that have dipped too far and are bouncing back. High win rate strategy.")
 
 st.info("""
 **How this works (plain English):**
-Big mutual funds and FIIs cannot hide when they are buying — their trades show up as 
-massive spikes in trading volume (3× or more the normal). When volume surges AND 
-the price goes up on that day, it means smart money is accumulating. You follow them in.
+Good stocks sometimes fall too much in a short time (RSI drops below 35). 
+When they start recovering, it's a great low-risk buying opportunity. 
+This screener catches that exact moment — when a quality stock is cheap and turning up.
 """)
 
-STOCKS_ALL = [
+NIFTY50 = [
     "RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","ICICIBANK.NS","HINDUNILVR.NS",
     "SBIN.NS","BHARTIARTL.NS","BAJFINANCE.NS","LT.NS","KOTAKBANK.NS","AXISBANK.NS",
     "ASIANPAINT.NS","MARUTI.NS","SUNPHARMA.NS","TATAMOTORS.NS","WIPRO.NS","HCLTECH.NS",
     "TECHM.NS","DRREDDY.NS","DIVISLAB.NS","CIPLA.NS","ADANIPORTS.NS","ONGC.NS",
-    "BPCL.NS","POWERGRID.NS","NTPC.NS","BAJAJ-AUTO.NS","M&M.NS","TITAN.NS",
-    "ULTRACEMCO.NS","JSWSTEEL.NS","TATASTEEL.NS","HINDALCO.NS","BRITANNIA.NS",
+    "BPCL.NS","POWERGRID.NS","NTPC.NS","BAJAJ-AUTO.NS","M&M.NS","NESTLEIND.NS",
+    "TITAN.NS","ULTRACEMCO.NS","JSWSTEEL.NS","TATASTEEL.NS","HINDALCO.NS",
+    "INDUSINDBK.NS","GRASIM.NS","BRITANNIA.NS","HEROMOTOCO.NS","EICHERMOT.NS",
 ]
 
 with st.sidebar:
     st.header("Settings")
-    capital      = st.number_input("Capital ₹", value=100000, step=5000)
-    risk_pct     = st.slider("Risk per trade %", 1.0, 3.0, 2.0, 0.5)
-    vol_threshold= st.slider("Volume surge (× normal)", 1.5, 5.0, 2.5, 0.5)
-    lookback     = st.slider("Look for surge in last N days", 1, 5, 2)
+    capital     = st.number_input("Capital ₹", value=100000, step=5000)
+    risk_pct    = st.slider("Risk per trade %", 1.0, 3.0, 2.0, 0.5)
+    rsi_entry   = st.slider("RSI entry level (oversold below)", 25, 45, 35)
+    rsi_confirm = st.slider("RSI recovery confirm (above)", 30, 50, 40)
     st.divider()
     st.markdown("**Strategy rules:**")
-    st.markdown(f"- Volume {vol_threshold}× the 20-day average")
-    st.markdown("- Price closed UP on the surge day")
-    st.markdown("- Stock above EMA50 (uptrend)")
-    st.markdown("- RSI not overbought (below 70)")
-    st.markdown("- Enter next day on open")
-    st.markdown("- Stop below surge day's low")
+    st.markdown(f"- RSI dipped below {rsi_entry} recently")
+    st.markdown(f"- RSI now recovering above {rsi_confirm}")
+    st.markdown("- Stock still above 200-day SMA (quality filter)")
+    st.markdown("- Price bouncing off support (today green candle)")
+    st.markdown("- Volume picking up on bounce day")
     st.caption("Not SEBI-registered advice.")
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch(ticker):
     try:
         df = yf.download(ticker, period="6mo", progress=False, auto_adjust=True)
-        if df.empty or len(df) < 30: return None
+        if df.empty or len(df) < 60: return None
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
         df.columns = [c.capitalize() for c in df.columns]
@@ -53,101 +53,103 @@ def fetch(ticker):
 
 def analyse(df, ticker):
     df = df.copy()
+    df['SMA200'] = df['Close'].rolling(200).mean()
     df['EMA50']  = df['Close'].ewm(span=50).mean()
     df['EMA20']  = df['Close'].ewm(span=20).mean()
-    df['VolMA20']= df['Volume'].rolling(20).mean()
-    d = df['Close'].diff()
-    g = d.clip(lower=0).rolling(14).mean()
-    l = (-d.clip(upper=0)).rolling(14).mean()
+    df['VolMA']  = df['Volume'].rolling(20).mean()
+    d  = df['Close'].diff()
+    g  = d.clip(lower=0).rolling(14).mean()
+    l  = (-d.clip(upper=0)).rolling(14).mean()
     df['RSI'] = 100 - (100/(1 + g/l.replace(0,1e-9)))
-    df['VolRatio'] = df['Volume'] / df['VolMA20']
-    df['UpDay']    = df['Close'] > df['Close'].shift(1)
 
-    # Check last N days for surge
-    recent = df.iloc[-lookback:]
-    surge_rows = recent[recent['VolRatio'] >= vol_threshold]
+    r     = df.iloc[-1]
+    r_prev= df.iloc[-2]
+    price = float(r['Close'])
+    rsi   = float(r['RSI'])   if not pd.isna(r['RSI'])   else 50
+    rsi_p = float(r_prev['RSI']) if not pd.isna(r_prev['RSI']) else 50
 
-    if surge_rows.empty:
-        return None
+    # Key conditions
+    rsi_was_oversold  = df['RSI'].iloc[-10:].min() < rsi_entry
+    rsi_recovering    = rsi > rsi_confirm and rsi > rsi_p
+    above_sma200      = price > float(r['SMA200']) if not pd.isna(r['SMA200']) else False
+    green_candle      = float(r['Close']) > float(r_prev['Close'])
+    vol_pickup        = float(r['Volume']) > float(r['VolMA']) * 1.1 if not pd.isna(r['VolMA']) else False
 
-    surge_row   = surge_rows.iloc[-1]
-    latest      = df.iloc[-1]
-    price       = float(latest['Close'])
-    rsi         = float(latest['RSI'])   if not pd.isna(latest['RSI'])   else 50
-    ema50       = float(latest['EMA50']) if not pd.isna(latest['EMA50']) else price
-    vol_ratio   = float(surge_row['VolRatio'])
-    up_on_surge = bool(surge_row['UpDay'])
-    above_ema   = price > ema50
-    rsi_ok      = rsi < 70
-    not_extended= price < float(latest['EMA20']) * 1.08 if not pd.isna(latest['EMA20']) else True
+    # Support level = recent 20-day low
+    support = float(df['Low'].iloc[-20:].min())
+    atr     = float((df['High'] - df['Low']).rolling(14).mean().iloc[-1])
+    stop    = round(support - atr * 0.5, 2)
+    target  = round(price + atr * 3, 2)
+    qty     = max(1, int((capital * risk_pct/100) / max(price - stop, 1)))
 
-    score = sum([vol_ratio >= vol_threshold, up_on_surge, above_ema, rsi_ok, not_extended])
+    score = sum([rsi_was_oversold, rsi_recovering, above_sma200, green_candle, vol_pickup])
 
-    # Stop below the low of surge day
-    stop   = round(float(surge_row['Low']) * 0.99, 2)
-    atr    = float((df['High']-df['Low']).rolling(14).mean().iloc[-1])
-    target = round(price + atr * 3, 2)
-    qty    = max(1, int((capital * risk_pct/100) / max(price - stop, 1)))
-
-    surge_date = surge_row.name.strftime('%d %b') if hasattr(surge_row.name, 'strftime') else "recent"
+    # Pullback % from 20-day high
+    hi20 = float(df['Close'].iloc[-20:].max())
+    pullback = round((hi20 - price)/hi20 * 100, 1)
 
     return {
-        "Ticker":        ticker.replace(".NS",""),
-        "Price ₹":       round(price, 2),
-        "Surge date":    surge_date,
-        "Vol ratio":     f"{vol_ratio:.1f}×",
-        "Up on surge":   "✅" if up_on_surge else "❌",
-        "Above EMA50":   "✅" if above_ema   else "❌",
-        "RSI ok":        "✅" if rsi_ok      else "❌",
-        "Not extended":  "✅" if not_extended else "❌",
-        "RSI":           round(rsi, 1),
-        "Score /5":      score,
-        "Signal":        "🟢 BUY" if score >= 4 and up_on_surge else "🟡 WATCH" if score >= 3 else "⚪ SKIP",
-        "Stop ₹":        stop,
-        "Target ₹":      target,
-        "Qty":           qty,
+        "Ticker":          ticker.replace(".NS",""),
+        "Price ₹":         round(price, 2),
+        "RSI now":         round(rsi, 1),
+        "RSI was low":     "✅" if rsi_was_oversold else "❌",
+        "RSI recovering":  "✅" if rsi_recovering   else "❌",
+        "Above SMA200":    "✅" if above_sma200      else "❌",
+        "Green candle":    "✅" if green_candle       else "❌",
+        "Volume up":       "✅" if vol_pickup         else "❌",
+        "Pullback %":      f"{pullback}%",
+        "Score /5":        score,
+        "Signal":          "🟢 BUY" if score >= 4 and above_sma200 else "🟡 WATCH" if score >= 3 else "⚪ SKIP",
+        "Stop ₹":          stop,
+        "Target ₹":        target,
+        "Qty":             qty,
+        "Pot profit ₹":    round((target - price) * qty, 0),
+        "Max loss ₹":      round((price - stop) * qty, 0),
     }
 
-if st.button("🔍 Detect volume surges", type="primary", use_container_width=True):
+if st.button("🔍 Find oversold bounces", type="primary", use_container_width=True):
     results = []
-    bar = st.progress(0, "Detecting unusual volume…")
-    for i, t in enumerate(STOCKS_ALL):
-        bar.progress((i+1)/len(STOCKS_ALL), f"Checking {t.replace('.NS','')}…")
+    bar = st.progress(0, "Scanning…")
+    for i, t in enumerate(NIFTY50):
+        bar.progress((i+1)/len(NIFTY50), f"Checking {t.replace('.NS','')}…")
         df = fetch(t)
         if df is not None:
-            r = analyse(df, t)
-            if r: results.append(r)
+            results.append(analyse(df, t))
     bar.empty()
-    st.session_state["vol_results"] = sorted(results, key=lambda x: x["Score /5"], reverse=True)
+    st.session_state["rsi_results"] = sorted(results, key=lambda x: x["Score /5"], reverse=True)
 
-if "vol_results" in st.session_state:
-    res = st.session_state["vol_results"]
-    if not res:
-        st.warning("No volume surges detected today. Check back tomorrow or lower the threshold.")
-    else:
-        buys   = [r for r in res if "BUY"   in r["Signal"]]
-        watchs = [r for r in res if "WATCH" in r["Signal"]]
+if "rsi_results" in st.session_state:
+    res = st.session_state["rsi_results"]
+    buys   = [r for r in res if "BUY"   in r["Signal"]]
+    watchs = [r for r in res if "WATCH" in r["Signal"]]
 
-        c1,c2,c3 = st.columns(3)
-        c1.metric("Stocks with surges", len(res))
-        c2.metric("Buy signals",        len(buys))
-        c3.metric("Watch signals",      len(watchs))
-        st.divider()
+    c1,c2,c3,c4 = st.columns(4)
+    c1.metric("Scanned",       len(res))
+    c2.metric("Buy signals",   len(buys))
+    c3.metric("Watch signals", len(watchs))
+    c4.metric("Max risk/trade",f"₹{capital*risk_pct/100:,.0f}")
 
-        if buys:
-            st.subheader("🟢 Institutional buying detected")
-            st.dataframe(pd.DataFrame(buys)[["Ticker","Price ₹","Surge date","Vol ratio",
-                                              "RSI","Stop ₹","Target ₹","Qty"]],
-                         use_container_width=True, hide_index=True)
+    st.divider()
 
-        if watchs:
-            st.subheader("🟡 Watch — surge detected but not all criteria met")
-            st.dataframe(pd.DataFrame(watchs)[["Ticker","Price ₹","Vol ratio","Up on surge",
-                                                "Above EMA50","RSI ok","Score /5"]],
-                         use_container_width=True, hide_index=True)
+    if buys:
+        st.subheader("🟢 Strong bounce setups")
+        df_b = pd.DataFrame(buys)[["Ticker","Price ₹","RSI now","Pullback %",
+                                    "Stop ₹","Target ₹","Qty","Pot profit ₹","Max loss ₹"]]
+        st.dataframe(df_b, use_container_width=True, hide_index=True)
 
-        with st.expander("All stocks with recent volume surges"):
-            st.dataframe(pd.DataFrame(res)[["Ticker","Price ₹","Vol ratio","Signal","Score /5"]],
-                         use_container_width=True, hide_index=True)
+        st.subheader("Checklist for buy signals")
+        df_c = pd.DataFrame(buys)[["Ticker","RSI was low","RSI recovering",
+                                    "Above SMA200","Green candle","Volume up","Score /5"]]
+        st.dataframe(df_c, use_container_width=True, hide_index=True)
+
+    if watchs:
+        st.subheader("🟡 Developing setups — watch these")
+        df_w = pd.DataFrame(watchs)[["Ticker","Price ₹","RSI now","Score /5",
+                                      "RSI was low","RSI recovering","Above SMA200"]]
+        st.dataframe(df_w, use_container_width=True, hide_index=True)
+
+    with st.expander("Show all stocks"):
+        st.dataframe(pd.DataFrame(res)[["Ticker","Price ₹","RSI now","Score /5","Signal"]],
+                     use_container_width=True, hide_index=True)
 else:
-    st.info("Click the button above to scan for unusual volume.")
+    st.info("Click the button above to start scanning.")
