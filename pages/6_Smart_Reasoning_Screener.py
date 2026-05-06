@@ -2,364 +2,334 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import warnings
+warnings.filterwarnings('ignore')
 
-st.set_page_config(page_title="Smart Screener with Reasoning", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="Smart Reasoning — All NSE+BSE", page_icon="🧠", layout="wide")
 
 st.markdown("""
 <style>
-.reason-box { background:#f0f7ff; border-left:4px solid #1a73e8; border-radius:6px; padding:12px 16px; margin:8px 0; font-size:14px; line-height:1.7; }
-.warn-box   { background:#fff8e1; border-left:4px solid #f9a825; border-radius:6px; padding:12px 16px; margin:8px 0; font-size:14px; line-height:1.7; }
-.danger-box { background:#ffeaea; border-left:4px solid #e53935; border-radius:6px; padding:12px 16px; margin:8px 0; font-size:14px; line-height:1.7; }
-.good-box   { background:#e8f5e9; border-left:4px solid #2e7d32; border-radius:6px; padding:12px 16px; margin:8px 0; font-size:14px; line-height:1.7; }
-.verdict-buy  { background:#e8f5e9; border:2px solid #2e7d32; border-radius:10px; padding:14px; text-align:center; font-size:18px; font-weight:700; color:#1b5e20; }
-.verdict-watch{ background:#fff8e1; border:2px solid #f9a825; border-radius:10px; padding:14px; text-align:center; font-size:18px; font-weight:700; color:#e65100; }
-.verdict-skip { background:#ffeaea; border:2px solid #e53935; border-radius:10px; padding:14px; text-align:center; font-size:18px; font-weight:700; color:#b71c1c; }
-.check  { color:#2e7d32; font-weight:700; }
-.cross  { color:#e53935; font-weight:700; }
-.warn   { color:#f57c00; font-weight:700; }
-.signal-bar { height:12px; border-radius:6px; margin:4px 0; }
-</style>
-""", unsafe_allow_html=True)
+    :root{--bg:#0d1117;--card:#161b22;--border:#30363d;--green:#3fb950;
+          --red:#f85149;--blue:#58a6ff;--gold:#ffa657;--text:#c9d1d9;--muted:#8b949e;}
+    .stApp{background-color:var(--bg);color:var(--text);}
+    div[data-testid="stSidebarContent"]{background:#0d1117;}
+    .stButton>button{background:linear-gradient(135deg,#1a6b3c,#0f4028);color:white;
+        border:1px solid var(--green);border-radius:8px;font-weight:700;
+        font-size:1rem;padding:10px 24px;width:100%;}
+    .stButton>button:hover{background:linear-gradient(135deg,#26a641,#1a6b3c);}
+    .reason-box{background:#0f1a2a;border-left:4px solid #58a6ff;border-radius:0 8px 8px 0;
+        padding:10px 14px;margin:6px 0;font-size:0.83rem;color:var(--text);line-height:1.6;}
+    .warn-box{background:#1a1500;border-left:4px solid #ffa657;border-radius:0 8px 8px 0;
+        padding:10px 14px;margin:6px 0;font-size:0.83rem;color:var(--text);line-height:1.6;}
+    .good-box{background:#0f2a1a;border-left:4px solid #3fb950;border-radius:0 8px 8px 0;
+        padding:10px 14px;margin:6px 0;font-size:0.83rem;color:var(--text);line-height:1.6;}
+    .danger-box{background:#2a0f0f;border-left:4px solid #f85149;border-radius:0 8px 8px 0;
+        padding:10px 14px;margin:6px 0;font-size:0.83rem;color:var(--text);line-height:1.6;}
+    .verdict-buy{background:#0f2a1a;border:2px solid #3fb950;border-radius:10px;
+        padding:12px;text-align:center;font-size:1.1rem;font-weight:700;color:#3fb950;margin-bottom:10px;}
+    .verdict-watch{background:#1a1500;border:2px solid #ffa657;border-radius:10px;
+        padding:12px;text-align:center;font-size:1.1rem;font-weight:700;color:#ffa657;margin-bottom:10px;}
+    .verdict-skip{background:#2a0f0f;border:2px solid #f85149;border-radius:10px;
+        padding:12px;text-align:center;font-size:1.1rem;font-weight:700;color:#f85149;margin-bottom:10px;}
+    .metric-card{background:var(--card);border:1px solid var(--border);
+        border-radius:10px;padding:14px 18px;text-align:center;margin-bottom:8px;}
+    .metric-val{font-size:1.8rem;font-weight:800;}
+    .metric-lbl{font-size:0.75rem;color:var(--muted);margin-top:2px;}
+</style>""", unsafe_allow_html=True)
 
-st.title("🧠 Smart Screener — Shows You WHY to Buy or Skip")
-st.caption("Every stock gets a full plain-English explanation. No more guessing.")
+st.title("🧠 Smart Reasoning Screener — WHY to Buy or Skip | All NSE + BSE")
+st.caption("Every flagged stock gets a full plain-English explanation. Scans all ~5,500+ listed stocks.")
 
-STOCKS = {
-    "Banking":  ["HDFCBANK.NS","ICICIBANK.NS","AXISBANK.NS","KOTAKBANK.NS","SBIN.NS","BAJFINANCE.NS","INDUSINDBK.NS"],
-    "IT":       ["INFY.NS","TCS.NS","WIPRO.NS","HCLTECH.NS","TECHM.NS"],
-    "Auto":     ["TATAMOTORS.NS","MARUTI.NS","M&M.NS","BAJAJ-AUTO.NS","HEROMOTOCO.NS","EICHERMOT.NS"],
-    "Pharma":   ["SUNPHARMA.NS","DRREDDY.NS","CIPLA.NS","DIVISLAB.NS","AUROPHARMA.NS"],
-    "Energy":   ["RELIANCE.NS","ONGC.NS","BPCL.NS","ADANIPORTS.NS","POWERGRID.NS","NTPC.NS"],
-    "FMCG":     ["HINDUNILVR.NS","NESTLEIND.NS","BRITANNIA.NS","DABUR.NS"],
-    "Infra":    ["LT.NS","ULTRACEMCO.NS","JSWSTEEL.NS","TATASTEEL.NS","HINDALCO.NS"],
-    "Telecom":  ["BHARTIARTL.NS"],
-    "Consumer": ["ASIANPAINT.NS","TITAN.NS","DMART.NS"],
-}
+# ── Load universe ─────────────────────────────────────────────────────────────
+try:
+    from stocks_universe import get_all_stocks
+    @st.cache_data(ttl=86400, show_spinner=False)
+    def load_universe():
+        return get_all_stocks()
+    ALL_STOCKS_DATA = load_universe()
+    UNIVERSE_SIZE = len(ALL_STOCKS_DATA)
+except Exception:
+    _FALLBACK = [
+        "RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","HINDUNILVR","SBIN","BAJFINANCE",
+        "BHARTIARTL","ITC","KOTAKBANK","LT","HCLTECH","ASIANPAINT","AXISBANK","MARUTI",
+        "SUNPHARMA","TITAN","ULTRACEMCO","NTPC","ONGC","POWERGRID","WIPRO","NESTLEIND",
+        "TATAMOTORS","TECHM","DIVISLAB","ADANIENT","ADANIPORTS","JSWSTEEL","TATASTEEL",
+        "CIPLA","BRITANNIA","HINDALCO","EICHERMOT","DRREDDY","BPCL","INDUSINDBK",
+        "HEROMOTOCO","BAJAJ-AUTO","M&M","KPITTECH","PERSISTENT","COFORGE","MPHASIS",
+        "TANLA","DEEPAKNITRI","NAVINFLUOR","FINEORG","IRCTC","TATAPOWER","DMART",
+        "SIEMENS","HAVELLS","PIDILITIND","BERGEPAINT","MUTHOOTFIN","LUPIN","BIOCON",
+        "GLAND","ALKEM","AMBUJACEM","SHRIRAMFIN","CHOLAFIN","BANDHANBNK","FEDERALBNK",
+        "IDFCFIRSTB","GREENPANEL","CENTURYPLY","POLYCAB","DIXON","AMBER","VGUARD",
+        "ASTRAL","BEL","HAL","GODREJPROP","MANAPPURAM","UJJIVAN","CREDITACC",
+        "TATAELXSI","BALKRISIND","ENDURANCE","COLPAL","DABUR","MARICO","EMAMILTD",
+        "LAURUSLABS","GRANULES","INTELLECT","MASTEK","NEWGEN","GALAXYSURF","NOCIL",
+        "AAVAS","HOMEFIRST","EQUITASBNK","SUPREMEIND","RATNAMANI","PCBL","PAGEIND",
+    ]
+    ALL_STOCKS_DATA = [{"symbol":s,"name":s,"exchange":"NSE","yf_ticker":f"{s}.NS"} for s in _FALLBACK]
+    UNIVERSE_SIZE = len(ALL_STOCKS_DATA)
 
-ALL_STOCKS = [(s, sec) for sec, lst in STOCKS.items() for s in lst]
-
+# ── SIDEBAR ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("⚙️ Settings")
-    capital    = st.number_input("Capital (₹)", value=100000, step=5000)
-    risk_pct   = st.slider("Risk per trade (%)", 1.0, 3.0, 2.0, 0.5)
-    min_score  = st.slider("Minimum score to show", 0, 10, 4)
-    show_only  = st.selectbox("Show signals", ["All", "BUY only", "BUY + WATCH"])
-    sel_sectors= st.multiselect("Sectors", list(STOCKS.keys()), default=list(STOCKS.keys()))
+    capital     = st.number_input("Capital (₹)", value=100000, step=5000)
+    risk_pct    = st.slider("Risk per trade (%)", 1.0, 3.0, 2.0, 0.5)
+    min_score   = st.slider("Minimum score to show", 0, 10, 5)
+    show_only   = st.selectbox("Show signals", ["All", "BUY only", "BUY + WATCH"])
+    exchange_filter = st.multiselect("Exchange", ["NSE","NSE-SME","BSE"], default=["NSE"])
+    max_workers = st.slider("Parallel workers", 1, 10, 5)
+    min_price   = st.number_input("Min Price ₹", 0, 100000, 5)
+    max_price   = st.number_input("Max Price ₹", 1, 1000000, 50000)
     st.divider()
     st.markdown("**Scoring system (out of 10):**")
-    st.markdown("- Above EMA50 → 2 pts")
-    st.markdown("- Above SMA200 → 2 pts")
-    st.markdown("- RSI 38–62 → 2 pts")
-    st.markdown("- Volume above avg → 2 pts")
-    st.markdown("- Pullback 3–18% → 1 pt")
-    st.markdown("- Weekly uptrend → 1 pt")
-    st.divider()
-    st.caption("Not SEBI-registered advice. Verify on TradingView before trading.")
+    st.markdown("- Above EMA50: +2  |  Above SMA200: +2")
+    st.markdown("- RSI 38-62: +2  |  Volume 1.2×: +2")
+    st.markdown("- Pullback 3-18%: +1  |  Weekly uptrend: +1")
+    st.markdown("**Score 8+ = BUY | 5-7 = WATCH**")
+    st.caption("Not SEBI-registered advice.")
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def fetch_data(ticker):
+# ── ANALYSIS ──────────────────────────────────────────────────────────────────
+def fetch_and_score(stock_info: dict) -> dict | None:
+    ticker = stock_info["yf_ticker"]
     try:
-        df = yf.download(ticker, period="1y", progress=False, auto_adjust=True)
-        if df.empty or len(df) < 55: return None
+        df = yf.download(ticker, period="1y", progress=False, auto_adjust=True, timeout=15)
+        if df is None or len(df) < 55:
+            return None
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
         df.columns = [c.capitalize() for c in df.columns]
-        return df
-    except: return None
 
-def analyse_stock(df, ticker, sector):
-    df = df.copy()
-    df['EMA20']  = df['Close'].ewm(span=20).mean()
-    df['EMA50']  = df['Close'].ewm(span=50).mean()
-    df['SMA200'] = df['Close'].rolling(200).mean() if len(df) >= 200 else np.nan
-    df['VolMA20']= df['Volume'].rolling(20).mean()
-    d = df['Close'].diff()
-    g = d.clip(lower=0).rolling(14).mean()
-    l = (-d.clip(upper=0)).rolling(14).mean()
-    df['RSI']    = 100 - (100/(1 + g/l.replace(0,1e-9)))
-    tr = pd.concat([df['High']-df['Low'],
-                    (df['High']-df['Close'].shift()).abs(),
-                    (df['Low'] -df['Close'].shift()).abs()], axis=1).max(axis=1)
-    df['ATR']    = tr.rolling(14).mean()
+        df['EMA20']   = df['Close'].ewm(span=20).mean()
+        df['EMA50']   = df['Close'].ewm(span=50).mean()
+        df['SMA200']  = df['Close'].rolling(min(200, len(df))).mean()
+        df['VolMA20'] = df['Volume'].rolling(20).mean()
+        d = df['Close'].diff()
+        g = d.clip(lower=0).rolling(14).mean()
+        l = (-d.clip(upper=0)).rolling(14).mean()
+        df['RSI'] = 100 - (100 / (1 + g / l.replace(0, 1e-9)))
+        tr = pd.concat([df['High'] - df['Low'],
+                        (df['High'] - df['Close'].shift()).abs(),
+                        (df['Low']  - df['Close'].shift()).abs()], axis=1).max(axis=1)
+        df['ATR'] = tr.rolling(14).mean()
 
-    r     = df.iloc[-1]
-    r_prev= df.iloc[-2]
-    price = float(r['Close'])
-    ema20 = float(r['EMA20'])  if not pd.isna(r['EMA20'])  else price
-    ema50 = float(r['EMA50'])  if not pd.isna(r['EMA50'])  else price
-    sma200= float(r['SMA200']) if not pd.isna(r['SMA200']) else price
-    rsi   = float(r['RSI'])    if not pd.isna(r['RSI'])    else 50
-    vol   = float(r['Volume'])
-    volma = float(r['VolMA20'])if not pd.isna(r['VolMA20'])else vol
-    atr   = float(r['ATR'])    if not pd.isna(r['ATR'])    else price*0.02
+        r = df.iloc[-1]
+        price = float(r['Close'])
+        if not (min_price <= price <= max_price):
+            return None
 
-    # ── Individual checks ──────────────────────────────────────────
-    above_ema50  = price > ema50
-    above_sma200 = price > sma200 if not pd.isna(r['SMA200']) else above_ema50
-    rsi_ok       = 38 <= rsi <= 62
-    vol_ratio    = vol / volma if volma > 0 else 1
-    vol_ok       = vol_ratio >= 1.2
-    recent_high  = float(df['Close'].rolling(20).max().iloc[-1])
-    pullback_pct = (recent_high - price) / recent_high * 100 if recent_high > 0 else 0
-    pullback_ok  = 3 <= pullback_pct <= 18
-    weekly = df['Close'].resample('W').last().dropna()
-    weekly_up = (float(weekly.iloc[-1]) > float(weekly.iloc[-5])) if len(weekly) >= 5 else above_ema50
+        e20    = float(r['EMA20'])   if not pd.isna(r['EMA20'])   else price
+        e50    = float(r['EMA50'])   if not pd.isna(r['EMA50'])   else price
+        sma200 = float(r['SMA200'])  if not pd.isna(r['SMA200'])  else price
+        rsi    = float(r['RSI'])     if not pd.isna(r['RSI'])     else 50
+        vma    = float(r['VolMA20']) if not pd.isna(r['VolMA20']) else 1
+        vol    = float(r['Volume'])
+        atr    = float(r['ATR'])     if not pd.isna(r['ATR'])     else price * 0.02
+        vol_ratio = vol / vma if vma > 0 else 1
+        rhi  = float(df['Close'].rolling(20).max().iloc[-1])
+        pb   = (rhi - price) / rhi * 100 if rhi > 0 else 0
+        weekly = df['Close'].resample('W').last().dropna()
+        weekly_up = float(weekly.iloc[-1]) > float(weekly.iloc[-5]) if len(weekly) >= 5 else True
+        hi52 = float(df['Close'].rolling(min(252, len(df))).max().iloc[-1])
 
-    # Earnings warning check
-    earnings_warning = False  # flag for near-results caution
+        score = 0
+        if price > e50:      score += 2
+        if price > sma200:   score += 2
+        if 38 <= rsi <= 62:  score += 2
+        if vol_ratio >= 1.2: score += 2
+        if 3 <= pb <= 18:    score += 1
+        if weekly_up:        score += 1
 
-    # Setup detection
-    range_width = (df['Close'].iloc[-20:].max() - df['Close'].iloc[-20:].min()) / df['Close'].iloc[-20:].min() * 100
-    hi52 = float(df['Close'].rolling(min(252,len(df))).max().iloc[-1])
-    near52 = (price / hi52) > 0.97
+        if score < min_score:
+            return None
+        signal = "BUY" if score >= 8 and weekly_up else "WATCH" if score >= 5 else "SKIP"
+        if show_only == "BUY only" and signal != "BUY":
+            return None
+        if show_only == "BUY + WATCH" and signal == "SKIP":
+            return None
 
-    if near52 and vol_ok:
-        setup = "52W High Breakout"
-    elif range_width < 8 and vol_ok:
-        setup = "Range Breakout"
-    elif pullback_ok and above_ema50:
-        setup = "Pullback in Uptrend"
-    elif abs(price - ema20)/price*100 < 1.5:
-        setup = "EMA20 Bounce"
-    else:
-        setup = "Developing"
+        stop   = round(price - 1.5 * atr, 2)
+        target = round(price + 3.0 * atr, 2)
+        qty    = max(1, int((capital * risk_pct / 100) / max(price - stop, 0.01)))
 
-    # Scoring
-    score = 0
-    if above_ema50:  score += 2
-    if above_sma200: score += 2
-    if rsi_ok:       score += 2
-    if vol_ok:       score += 2
-    if pullback_ok:  score += 1
-    if weekly_up:    score += 1
+        # Build plain-English reasons
+        reasons_buy, reasons_warn = [], []
+        if price > e50:
+            reasons_buy.append(f"✅ Price ₹{price:,.0f} is above 50-day EMA ₹{e50:,.0f} — uptrend confirmed")
+        else:
+            reasons_warn.append(f"⚠️ Price ₹{price:,.0f} is below 50-day EMA ₹{e50:,.0f} — no uptrend yet")
+        if price > sma200:
+            reasons_buy.append(f"✅ Above 200-day SMA ₹{sma200:,.0f} — long-term health is strong")
+        else:
+            reasons_warn.append(f"⚠️ Below 200-day SMA ₹{sma200:,.0f} — long-term trend is weak")
+        if 38 <= rsi <= 62:
+            reasons_buy.append(f"✅ RSI {rsi:.0f} is in ideal entry zone (38–62) — not overbought, not oversold")
+        elif rsi > 70:
+            reasons_warn.append(f"⚠️ RSI {rsi:.0f} is overbought — risk of pullback, wait for lower entry")
+        else:
+            reasons_warn.append(f"⚠️ RSI {rsi:.0f} is weak — momentum not yet recovered")
+        if vol_ratio >= 1.5:
+            reasons_buy.append(f"✅ Volume is {vol_ratio:.1f}× normal — strong institutional interest")
+        elif vol_ratio >= 1.2:
+            reasons_buy.append(f"✅ Volume {vol_ratio:.1f}× average — decent buying interest")
+        else:
+            reasons_warn.append(f"⚠️ Volume only {vol_ratio:.1f}× normal — low participation, wait for volume")
+        if 5 <= pb <= 15:
+            reasons_buy.append(f"✅ Pulled back {pb:.1f}% from recent high — ideal entry zone, not extended")
+        elif pb > 18:
+            reasons_warn.append(f"⚠️ Pulled back {pb:.1f}% — quite deep, check if fundamental reason")
+        if weekly_up:
+            reasons_buy.append("✅ Weekly chart is in uptrend — big picture is bullish")
+        else:
+            reasons_warn.append("⚠️ Weekly chart is not in uptrend — wait for weekly confirmation")
+        if (price / hi52) > 0.97:
+            reasons_buy.append(f"✅ Near 52-week high ₹{hi52:,.0f} — strong momentum, new highs expected")
 
-    # Signal
-    signal = "BUY" if score >= 8 and weekly_up else "WATCH" if score >= 5 else "SKIP"
+        return {
+            "symbol":       stock_info["symbol"],
+            "name":         stock_info.get("name", stock_info["symbol"])[:35],
+            "exchange":     stock_info.get("exchange","NSE"),
+            "price":        round(price, 2),
+            "score":        score,
+            "signal":       signal,
+            "rsi":          round(rsi, 1),
+            "vol_ratio":    round(vol_ratio, 2),
+            "pullback":     round(pb, 1),
+            "e50":          round(e50, 2),
+            "sma200":       round(sma200, 2),
+            "stop":         stop,
+            "target":       target,
+            "qty":          qty,
+            "pot_profit":   round((target - price) * qty, 0),
+            "max_loss":     round((price - stop) * qty, 0),
+            "rr":           round((target - price) / max(price - stop, 0.01), 1),
+            "reasons_buy":  reasons_buy,
+            "reasons_warn": reasons_warn,
+        }
+    except Exception:
+        return None
 
-    # Trade levels
-    stop   = round(price - 1.5*atr, 2)
-    target = round(price + 3.0*atr, 2)
-    qty    = max(1, int((capital*risk_pct/100) / max(price-stop, 0.01)))
-    rr     = round((target-price)/(price-stop), 1) if price > stop else 0
-    pct_from_hi = round((price/hi52 - 1)*100, 1)
+# ── MAIN ─────────────────────────────────────────────────────────────────────
+c1, c2, c3, c4 = st.columns(4)
+for col, val, lbl, color in [
+    (c1, f"{UNIVERSE_SIZE:,}", "Stocks Universe", "#58a6ff"),
+    (c2, "Plain English", "Reasoning Style", "#3fb950"),
+    (c3, "Full Trade Plan", "Auto Generated", "#ffa657"),
+    (c4, "Score /10", "Scoring System", "#bc8cff"),
+]:
+    col.markdown(f"""<div class='metric-card'>
+        <div class='metric-val' style='color:{color}'>{val}</div>
+        <div class='metric-lbl'>{lbl}</div></div>""", unsafe_allow_html=True)
+st.markdown("---")
 
-    # ── Plain English reasoning ─────────────────────────────────────
-    reasons_for  = []
-    reasons_against = []
-    warnings     = []
+if st.button("🔍 Scan ALL stocks with full reasoning", use_container_width=True):
+    stocks_to_scan = [s for s in ALL_STOCKS_DATA if s.get("exchange","NSE") in exchange_filter]
+    total = len(stocks_to_scan)
+    st.info(f"Scanning **{total:,} stocks** | Min score: {min_score} | Signal: {show_only}")
 
-    # Positive reasons
-    if above_sma200:
-        gap = round((price/sma200 - 1)*100, 1)
-        reasons_for.append(f"Stock is in a long-term uptrend — trading {gap}% above its 200-day average. This means the big picture is healthy.")
-    if above_ema50:
-        reasons_for.append(f"Price is above the 50-day EMA (₹{ema50:.0f}), confirming a medium-term uptrend. The stock is in good shape on a weekly basis.")
-    if pullback_ok:
-        reasons_for.append(f"The stock has pulled back {pullback_pct:.1f}% from its recent high of ₹{recent_high:.0f}. This is a healthy dip — not a crash — giving you a lower-risk entry point.")
-    if rsi_ok:
-        reasons_for.append(f"RSI is at {rsi:.0f} — in the sweet spot of 38–62. Not overbought (no panic buying) and not oversold (no panic selling). Healthy momentum.")
-    if vol_ok:
-        reasons_for.append(f"Today's trading volume is {vol_ratio:.1f}× the normal average. Higher volume means more conviction behind the price move.")
-    if weekly_up:
-        reasons_for.append("The weekly chart trend is pointing upward — you are trading with the wind behind you, not against it.")
-    if near52:
-        reasons_for.append(f"Price is within 3% of its 52-week high (₹{hi52:.0f}). Stocks near all-time or yearly highs often continue higher — strength begets strength.")
-    if setup == "Pullback in Uptrend":
-        reasons_for.append("Classic pullback setup: uptrend intact, temporary dip, momentum starting to recover. This is one of the most reliable swing trading patterns.")
-    if setup == "Range Breakout":
-        reasons_for.append("Stock has been consolidating in a tight range and is now breaking out with volume. Like a coiled spring releasing — a breakout after consolidation is powerful.")
+    prog, prog_txt = st.progress(0), st.empty()
+    results, scanned = [], 0
 
-    # Negative reasons
-    if not above_sma200:
-        reasons_against.append(f"⚠️ Price (₹{price:.0f}) is BELOW the 200-day SMA (₹{sma200:.0f}). This means the stock is in a long-term downtrend. High risk.")
-    if not above_ema50:
-        reasons_against.append(f"Price is below the 50-day EMA — medium term trend is down. Not ideal for a buy trade.")
-    if rsi > 70:
-        reasons_against.append(f"RSI is {rsi:.0f} — overbought territory. The stock has run up too fast. Better to wait for a pullback before buying.")
-    if rsi < 35:
-        reasons_against.append(f"RSI is {rsi:.0f} — very oversold. Could mean the stock is under heavy selling pressure. Wait for stabilisation first.")
-    if not vol_ok:
-        reasons_against.append(f"Volume is only {vol_ratio:.1f}× normal — below our 1.2× threshold. Low volume moves are less reliable and can reverse quickly.")
-    if not weekly_up:
-        reasons_against.append("The weekly trend is flat or down — you would be fighting the bigger trend. Wait for the weekly to turn upward.")
-    if pullback_pct > 20:
-        reasons_against.append(f"The stock has fallen {pullback_pct:.1f}% from its recent high — this is more than a normal pullback and could indicate real selling pressure.")
-    if pct_from_hi < -30:
-        reasons_against.append(f"Stock is {abs(pct_from_hi):.0f}% below its 52-week high. This signals fundamental weakness, not just a dip.")
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = {ex.submit(fetch_and_score, s): s for s in stocks_to_scan}
+        for fut in as_completed(futures):
+            scanned += 1
+            try:
+                r = fut.result()
+                if r: results.append(r)
+            except Exception: pass
+            if scanned % 20 == 0 or scanned == total:
+                prog.progress(scanned / total)
+                prog_txt.markdown(f"Scanned **{scanned:,}/{total:,}** | Found: **{len(results)}** setups")
 
-    # Warnings
-    if rr < 2:
-        warnings.append(f"R:R ratio is only {rr} — below our 2:1 minimum. The risk is not justified by the potential reward at current price.")
-    if pullback_pct < 3 and not near52:
-        warnings.append("The stock hasn't pulled back enough from its recent high. Waiting for a 5–8% dip would give a better entry.")
-
-    # Overall plain-English verdict
-    if signal == "BUY":
-        verdict_text = f"✅ BUY SIGNAL — Score {score}/10"
-        verdict_class = "verdict-buy"
-        summary = f"This stock is showing {len(reasons_for)} strong positive signals and only {len(reasons_against)} concerns. The setup is a '{setup}' — one of the better swing trading opportunities right now. Entry around ₹{price:.0f}, stop at ₹{stop:.0f}, target ₹{target:.0f}."
-    elif signal == "WATCH":
-        verdict_text = f"🟡 WATCH — Score {score}/10"
-        verdict_class = "verdict-watch"
-        summary = f"Some positive signals but not all criteria are met yet. Keep this on your radar. {len(reasons_against)} things need to improve before entering. Do not buy yet."
-    else:
-        verdict_text = f"⛔ SKIP — Score {score}/10"
-        verdict_class = "verdict-skip"
-        summary = f"Too many concerns right now — {len(reasons_against)} red flags. The risk is higher than the reward. There are better opportunities in the market."
-
-    return {
-        "name":       ticker.replace(".NS",""),
-        "sector":     sector,
-        "price":      round(price, 2),
-        "score":      score,
-        "signal":     signal,
-        "setup":      setup,
-        "rsi":        round(rsi, 1),
-        "vol_ratio":  round(vol_ratio, 2),
-        "ema50":      round(ema50, 2),
-        "sma200":     round(sma200, 2),
-        "pullback":   round(pullback_pct, 1),
-        "hi52":       round(hi52, 2),
-        "pct_hi52":   pct_from_hi,
-        "stop":       stop,
-        "target":     target,
-        "qty":        qty,
-        "rr":         rr,
-        "above_ema50":  above_ema50,
-        "above_sma200": above_sma200,
-        "rsi_ok":       rsi_ok,
-        "vol_ok":       vol_ok,
-        "pullback_ok":  pullback_ok,
-        "weekly_up":    weekly_up,
-        "reasons_for":  reasons_for,
-        "reasons_against": reasons_against,
-        "warnings":     warnings,
-        "verdict_text": verdict_text,
-        "verdict_class":verdict_class,
-        "summary":      summary,
-    }
-
-def render_stock_card(r):
-    icon = {"BUY":"🟢","WATCH":"🟡","SKIP":"🔴"}.get(r["signal"],"⚪")
-    with st.expander(f"{icon} **{r['name']}** ({r['sector']}) — Score {r['score']}/10 — {r['setup']} — ₹{r['price']}", expanded=(r["signal"]=="BUY")):
-
-        # Verdict banner
-        st.markdown(f'<div class="{r["verdict_class"]}">{r["verdict_text"]}</div>', unsafe_allow_html=True)
-        st.markdown(f'<div style="font-size:14px;margin:8px 0 14px;color:#333;">{r["summary"]}</div>', unsafe_allow_html=True)
-
-        col1, col2, col3, col4, col5 = st.columns(5)
-        col1.metric("Price",   f"₹{r['price']}")
-        col2.metric("Score",   f"{r['score']}/10")
-        col3.metric("RSI",     r['rsi'])
-        col4.metric("Vol ratio",f"{r['vol_ratio']}×")
-        col5.metric("R:R",     f"{r['rr']} : 1")
-
-        st.divider()
-
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("##### ✅ Reasons to buy")
-            if r["reasons_for"]:
-                for reason in r["reasons_for"]:
-                    st.markdown(f'<div class="good-box">✔ {reason}</div>', unsafe_allow_html=True)
-            else:
-                st.markdown('<div class="danger-box">No strong buy reasons found.</div>', unsafe_allow_html=True)
-
-        with c2:
-            st.markdown("##### ❌ Reasons to be careful")
-            if r["reasons_against"]:
-                for reason in r["reasons_against"]:
-                    st.markdown(f'<div class="danger-box">✘ {reason}</div>', unsafe_allow_html=True)
-            else:
-                st.markdown('<div class="good-box">No major concerns found.</div>', unsafe_allow_html=True)
-
-        if r["warnings"]:
-            st.markdown("##### ⚠️ Cautions")
-            for w in r["warnings"]:
-                st.markdown(f'<div class="warn-box">⚠ {w}</div>', unsafe_allow_html=True)
-
-        st.divider()
-        st.markdown("##### 📋 Technical checklist")
-        checks = [
-            ("Price above 50-day EMA",    r["above_ema50"],  f"Price ₹{r['price']} vs EMA50 ₹{r['ema50']}"),
-            ("Price above 200-day SMA",   r["above_sma200"], f"Price ₹{r['price']} vs SMA200 ₹{r['sma200']}"),
-            ("RSI in healthy range 38–62", r["rsi_ok"],      f"Current RSI: {r['rsi']}"),
-            ("Volume above average",       r["vol_ok"],      f"Volume ratio: {r['vol_ratio']}× (need 1.2×)"),
-            ("Pullback 3–18% from high",   r["pullback_ok"], f"Pulled back {r['pullback']}% from ₹{r['hi52']}"),
-            ("Weekly trend is up",         r["weekly_up"],   "Based on last 10 weeks"),
-        ]
-        for label, passed, detail in checks:
-            icon2 = "✅" if passed else "❌"
-            color = "#2e7d32" if passed else "#c62828"
-            st.markdown(f'<div style="font-size:13px;padding:5px 0;border-bottom:1px solid #eee;">'
-                        f'{icon2} <b style="color:{color}">{label}</b> — <span style="color:#555">{detail}</span></div>',
-                        unsafe_allow_html=True)
-
-        if r["signal"] == "BUY":
-            st.divider()
-            st.markdown("##### 💰 Trade plan")
-            t1,t2,t3,t4 = st.columns(4)
-            t1.metric("Entry around",  f"₹{r['price']}")
-            t2.metric("Stop loss at",  f"₹{r['stop']}", delta=f"-{round((r['price']-r['stop'])/r['price']*100,1)}%", delta_color="inverse")
-            t3.metric("Target",        f"₹{r['target']}", delta=f"+{round((r['target']-r['price'])/r['price']*100,1)}%")
-            t4.metric("Qty to buy",    f"{r['qty']} shares")
-            max_loss = round((r['price']-r['stop'])*r['qty'], 0)
-            pot_gain = round((r['target']-r['price'])*r['qty'], 0)
-            st.info(f"💡 **Position size:** ₹{r['qty']*r['price']:,.0f} deployed · **Max you can lose:** ₹{max_loss:,.0f} · **Potential profit:** ₹{pot_gain:,.0f}")
-            st.caption("Always verify this setup on TradingView before placing any real order.")
-
-# ─── Main app ───────────────────────────────────────────────────────────────
-
-tickers = [(s, sec) for sec, lst in STOCKS.items() for s in lst if sec in sel_sectors]
-
-if st.button("🔍 Scan & explain all stocks", type="primary", use_container_width=True):
-    results = []
-    bar = st.progress(0, "Analysing stocks…")
-    for i, (ticker, sector) in enumerate(tickers):
-        bar.progress((i+1)/len(tickers), f"Analysing {ticker.replace('.NS','')}…")
-        df = fetch_data(ticker)
-        if df is not None:
-            results.append(analyse_stock(df, ticker, sector))
-    bar.empty()
+    prog.progress(1.0)
     results.sort(key=lambda x: x["score"], reverse=True)
-    st.session_state["smart_results"] = results
+    st.session_state["reasoning_results"] = results
+    st.success(f"✅ Done! Found **{len(results)}** setups from {total:,} stocks.")
 
-if "smart_results" in st.session_state:
-    results = st.session_state["smart_results"]
+if "reasoning_results" in st.session_state:
+    res    = st.session_state["reasoning_results"]
+    buys   = [r for r in res if r["signal"] == "BUY"]
+    watchs = [r for r in res if r["signal"] == "WATCH"]
 
-    # Apply filters
-    filtered = [r for r in results if r["score"] >= min_score]
-    if show_only == "BUY only":
-        filtered = [r for r in filtered if r["signal"] == "BUY"]
-    elif show_only == "BUY + WATCH":
-        filtered = [r for r in filtered if r["signal"] in ("BUY","WATCH")]
-
-    buys   = [r for r in results if r["signal"] == "BUY"]
-    watchs = [r for r in results if r["signal"] == "WATCH"]
-    skips  = [r for r in results if r["signal"] == "SKIP"]
-
-    c1,c2,c3,c4 = st.columns(4)
-    c1.metric("Scanned",       len(results))
-    c2.metric("Buy signals",   len(buys),   delta="Act on these")
-    c3.metric("Watch signals", len(watchs), delta="Monitor these")
-    c4.metric("Skip",          len(skips))
-
+    c1, c2, c3 = st.columns(3)
+    for col, val, lbl in [(c1,len(res),"Total found"),(c2,len(buys),"BUY signals"),(c3,len(watchs),"WATCH signals")]:
+        col.markdown(f"""<div class='metric-card'>
+            <div class='metric-val' style='color:#3fb950'>{val}</div>
+            <div class='metric-lbl'>{lbl}</div></div>""", unsafe_allow_html=True)
     st.divider()
 
-    if not filtered:
-        st.info("No stocks match your current filters. Try lowering the minimum score.")
-    else:
-        st.caption(f"Showing {len(filtered)} stocks — click any row to see full analysis and reasoning")
-        for r in filtered:
-            render_stock_card(r)
+    for r in res:
+        sig_color = "#3fb950" if r["signal"]=="BUY" else "#ffa657" if r["signal"]=="WATCH" else "#f85149"
+        sig_icon  = "🟢" if r["signal"]=="BUY" else "🟡"
+        with st.expander(
+            f"{sig_icon} **{r['name']}** [{r['symbol']}] [{r['exchange']}]  "
+            f"| Score: {r['score']}/10 | ₹{r['price']:,.2f} | {r['signal']}",
+            expanded=(r["score"] >= 8)
+        ):
+            left, right = st.columns([1.2, 1])
+            with left:
+                # Verdict
+                verdict_cls = "verdict-buy" if r["signal"]=="BUY" else "verdict-watch"
+                verdict_txt = (f"✅ BUY — Score {r['score']}/10" if r["signal"]=="BUY"
+                               else f"👁️ WATCH — Score {r['score']}/10")
+                st.markdown(f"<div class='{verdict_cls}'>{verdict_txt}</div>", unsafe_allow_html=True)
+
+                st.markdown("**Reasons to consider buying:**")
+                for reason in r["reasons_buy"]:
+                    st.markdown(f"<div class='good-box'>{reason}</div>", unsafe_allow_html=True)
+
+                if r["reasons_warn"]:
+                    st.markdown("**Caution points:**")
+                    for warn in r["reasons_warn"]:
+                        st.markdown(f"<div class='warn-box'>{warn}</div>", unsafe_allow_html=True)
+
+            with right:
+                st.markdown("#### 💰 Trade Plan")
+                st.markdown(f"**Capital:** ₹{capital:,.0f}")
+                for k, v, color in [
+                    ("Current Price", f"₹{r['price']:,.2f}", "#c9d1d9"),
+                    ("Entry (at breakout)", f"₹{r['price']:,.2f}", "#ffa657"),
+                    ("Stop Loss", f"₹{r['stop']:,.2f}", "#f85149"),
+                    ("Target", f"₹{r['target']:,.2f}", "#3fb950"),
+                    ("Quantity", f"{r['qty']} shares", "#c9d1d9"),
+                    ("Max Loss", f"₹{r['max_loss']:,.0f}", "#f85149"),
+                    ("Potential Profit", f"₹{r['pot_profit']:,.0f}", "#3fb950"),
+                    ("R:R Ratio", f"{r['rr']} : 1", "#ffa657"),
+                ]:
+                    st.markdown(
+                        f"<div style='display:flex;justify-content:space-between;"
+                        f"padding:4px 0;border-bottom:1px solid #21262d'>"
+                        f"<span style='color:#8b949e;font-size:0.82rem'>{k}</span>"
+                        f"<span style='color:{color};font-weight:700;font-size:0.82rem'>{v}</span>"
+                        f"</div>", unsafe_allow_html=True
+                    )
+
+                st.markdown("---")
+                st.markdown("#### 📊 Technical Summary")
+                for k, v in [("RSI", r["rsi"]),("Volume ×", r["vol_ratio"]),
+                              ("Pullback %", f"{r['pullback']}%"),
+                              ("EMA 50", f"₹{r['e50']:,.0f}"),("SMA 200", f"₹{r['sma200']:,.0f}")]:
+                    st.markdown(
+                        f"<div style='display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid #21262d'>"
+                        f"<span style='color:#8b949e;font-size:0.8rem'>{k}</span>"
+                        f"<span style='color:#c9d1d9;font-weight:600;font-size:0.8rem'>{v}</span>"
+                        f"</div>", unsafe_allow_html=True
+                    )
+
+                st.markdown("""
+                <div style='background:#1a1500;border-left:3px solid #ffa657;
+                    border-radius:0 6px 6px 0;padding:8px 10px;margin-top:10px;font-size:0.78rem;color:#c9d1d9'>
+                ⚠️ Verify on TradingView. Check NSE for upcoming earnings dates.
+                This is educational — not SEBI-registered advice.
+                </div>""", unsafe_allow_html=True)
 else:
-    st.info("👆 Click the button above to scan stocks and see why you should or should not buy each one.")
+    st.info(f"👆 Click scan to analyse all {UNIVERSE_SIZE:,} stocks with plain-English reasoning.")
     st.markdown("""
-    **What makes this screener different:**
-    - Every stock gets a full plain-English explanation
-    - You see exactly WHY a stock scored well or poorly
-    - Specific reasons for AND against buying
-    - Complete trade plan with exact entry, stop, and target
-    - Checklist of every technical condition checked
+    **This screener is unique** — it doesn't just give you a buy/skip signal.
+    It tells you *exactly why* a stock looks good or risky, in plain language anyone can understand.
+
+    Each result shows:
+    - ✅ Every positive reason to consider the trade
+    - ⚠️ Every caution or risk to be aware of
+    - A complete trade plan with entry, stop, target, quantity, and R:R ratio
     """)
