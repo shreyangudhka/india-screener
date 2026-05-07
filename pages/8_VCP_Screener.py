@@ -278,20 +278,29 @@ def build_candlestick_chart(ticker: str, result: dict, period: str = "6mo") -> g
     # ── Horizontal levels ─────────────────────────────────────────────────────
     price = result.get("current_price", 0)
     if result.get("stop_loss"):
-        fig.add_hline(y=result["stop_loss"], line_color="#f85149",
-                      line_dash="dot", line_width=1.2,
-                      annotation_text=f"Stop ₹{result['stop_loss']:,.0f}",
-                      annotation_font_color="#f85149", row=1, col=1)
+        fig.add_shape(type="line", xref="paper", yref="y",
+                      x0=0, x1=1, y0=result["stop_loss"], y1=result["stop_loss"],
+                      line=dict(color="#f85149", dash="dot", width=1.2), row=1, col=1)
+        fig.add_annotation(xref="paper", yref="y", x=1.0, y=result["stop_loss"],
+                           text=f"Stop ₹{result['stop_loss']:,.0f}",
+                           font=dict(color="#f85149", size=10),
+                           showarrow=False, xanchor="right", row=1, col=1)
     if result.get("target"):
-        fig.add_hline(y=result["target"],   line_color="#3fb950",
-                      line_dash="dot", line_width=1.2,
-                      annotation_text=f"Target ₹{result['target']:,.0f}",
-                      annotation_font_color="#3fb950", row=1, col=1)
+        fig.add_shape(type="line", xref="paper", yref="y",
+                      x0=0, x1=1, y0=result["target"], y1=result["target"],
+                      line=dict(color="#3fb950", dash="dot", width=1.2), row=1, col=1)
+        fig.add_annotation(xref="paper", yref="y", x=1.0, y=result["target"],
+                           text=f"Target ₹{result['target']:,.0f}",
+                           font=dict(color="#3fb950", size=10),
+                           showarrow=False, xanchor="right", row=1, col=1)
     if result.get("pivot"):
-        fig.add_hline(y=result["pivot"],    line_color="#ffa657",
-                      line_dash="dashdot", line_width=1.0,
-                      annotation_text=f"Pivot ₹{result['pivot']:,.0f}",
-                      annotation_font_color="#ffa657", row=1, col=1)
+        fig.add_shape(type="line", xref="paper", yref="y",
+                      x0=0, x1=1, y0=result["pivot"], y1=result["pivot"],
+                      line=dict(color="#ffa657", dash="dashdot", width=1.0), row=1, col=1)
+        fig.add_annotation(xref="paper", yref="y", x=1.0, y=result["pivot"],
+                           text=f"Pivot ₹{result['pivot']:,.0f}",
+                           font=dict(color="#ffa657", size=10),
+                           showarrow=False, xanchor="right", row=1, col=1)
 
     # ── Volume bars ───────────────────────────────────────────────────────────
     v_colors = ["#3fb950" if c >= o else "#f85149"
@@ -317,8 +326,17 @@ def build_candlestick_chart(ticker: str, result: dict, period: str = "6mo") -> g
     for ci, (pct, bw, bc) in enumerate(zip(contractions, band_widths, band_colors)):
         bs = max(0, band_end_i - bw)
         x0 = df.index[bs]; x1 = df.index[band_end_i - 1]
-        fig.add_vrect(x0=x0, x1=x1, fillcolor=bc,
-                      layer="below", line_width=0, row=1, col=1)
+        # Use add_shape instead of add_vrect — works reliably with row/col in subplots
+        fig.add_shape(
+            type="rect",
+            x0=x0, x1=x1,
+            y0=0, y1=1,
+            xref="x", yref="paper",
+            fillcolor=bc,
+            line_width=0,
+            layer="below",
+            row=1, col=1,
+        )
         mid_i = (bs + band_end_i) // 2
         fig.add_annotation(
             x=df.index[mid_i], y=df["High"].iloc[bs:band_end_i].max(),
