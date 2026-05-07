@@ -14,6 +14,7 @@ import time, warnings, math
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 warnings.filterwarnings("ignore")
+from fast_scan import fast_scan_all, load_cached_results, clear_cache
 
 # ── Import universal stock universe ──────────────────────────────────────────
 try:
@@ -218,17 +219,14 @@ def compute_vcp_score(df: pd.DataFrame) -> dict:
     return result
 
 
-def fetch_and_score(ticker_info: dict, period: str = "1y") -> dict | None:
-    """Download data for one stock and compute VCP score."""
+def fetch_and_score(ticker_info: dict, df=None, period: str = "1y") -> dict | None:
+    """Score a stock for VCP. df is passed in by fast_scan_all (batch download)."""
     try:
-        ticker = ticker_info["yf_ticker"]
-        df = yf.download(ticker, period=period, interval="1d",
-                         auto_adjust=True, progress=False, timeout=15)
         if df is None or len(df) < 60:
             return None
         vcp = compute_vcp_score(df)
         if vcp["score"] < 4:
-            return None    # skip low scores — saves memory
+            return None
         return {
             **ticker_info,
             **vcp,
@@ -478,7 +476,7 @@ with st.expander("📖 What is VCP? How to use this screener?", expanded=False):
 # ─────────────────────────────────────────────────────────────────────────────
 
 if scan_clicked:
-    st.session_state["scan_results"] = []
+    st.session_state["scan_results"] = results if "results" in dir() else []
 
     # 1. Get stock list
     with st.spinner("📋 Loading stock universe (NSE + BSE)…"):
@@ -532,45 +530,50 @@ if scan_clicked:
     errors  = 0
     start_t = time.time()
 
-    # 4. Parallel scan with progress updates
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(fetch_and_score, s, period): s
-                   for s in stocks_to_scan}
 
-        for future in as_completed(futures):
-            scanned += 1
-            try:
-                res = future.result()
-                if res and res.get("score", 0) >= min_score:
-                    price_ok = min_price <= (res.get("current_price") or 0) <= max_price
-                    if price_ok:
-                        results.append(res)
-            except Exception:
-                errors += 1
+    def _vcp_wrapper(stock_info: dict, df) -> dict | None:
+        res = fetch_and_score(stock_info, df=df, period=period)
+        if res and res.get("score", 0) >= min_score:
+            price_ok = min_price <= (res.get("current_price") or 0) <= max_price
+            if price_ok:
+                return res
+        return None
 
-            # Update progress every 20 stocks
-            if scanned % 20 == 0 or scanned == total:
-                pct = scanned / total
-                elapsed = time.time() - start_t
-                eta = (elapsed / scanned) * (total - scanned) if scanned > 0 else 0
-                prog_bar.progress(pct)
-                prog_text.markdown(
-                    f"<p class='progress-text'>Scanned {scanned:,}/{total:,} stocks "
-                    f"({pct*100:.1f}%) | Found: {len(results)} VCPs | "
-                    f"Elapsed: {elapsed:.0f}s | ETA: {eta:.0f}s</p>",
-                    unsafe_allow_html=True
-                )
-
+    cached = load_cached_results("vcp", cache_hours=4)
+    if cached:
+        st.success(f"⚡ Loaded {len(cached)} VCPs from cache (≤4h old).")
+        results = cached
+    else:
+        prog_bar  = st.progress(0)
+        prog_text = st.empty()
+        results = fast_scan_all(
+            all_stocks      = stocks_to_scan,
+            score_fn        = _vcp_wrapper,
+            exchange_filter = None,       # already filtered above
+            min_price       = min_price,
+            max_price       = max_price,
+            period          = period,
+            batch_size      = 40,
+            progress_bar    = prog_bar,
+            status_text     = prog_text,
+            cache_key       = "vcp",
+            cache_hours     = 4,
+        )
     elapsed_total = time.time() - start_t
-    prog_bar.progress(1.0)
-    st.session_state["scan_results"] = results
-    st.success(f"✅ Scan complete! Scanned **{scanned:,} stocks** in **{elapsed_total:.0f}s** "
+    st.success(f"✅ Scan complete! Found **{len(results)} VCP setups** (Score ≥ {min_score})")
                f"— Found **{len(results)} VCP setups** (Score ≥ {min_score})")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  DISPLAY RESULTS
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+if st.button("🗑️ Clear cache & re-scan fresh", key="clr_vcp"):
+    clear_cache("vcp")
+    if "scan_results" in st.session_state:
+        del st.session_state["scan_results"]
+    st.rerun()
 
 results = st.session_state.get("scan_results", [])
 
