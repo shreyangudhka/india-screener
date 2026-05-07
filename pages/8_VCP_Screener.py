@@ -99,6 +99,11 @@ def compute_vcp_score(df: pd.DataFrame) -> dict:
     if df is None or len(df) < 60:
         return result
 
+    # Fix yfinance MultiIndex columns (newer versions)
+    if isinstance(df.columns, pd.MultiIndex):
+        df = df.copy()
+        df.columns = df.columns.droplevel(1)
+
     close  = df["Close"].dropna()
     high   = df["High"].dropna()
     low    = df["Low"].dropna()
@@ -245,6 +250,13 @@ def build_candlestick_chart(ticker: str, result: dict, period: str = "6mo") -> g
         df = yf.download(ticker, period=period, interval="1d",
                          auto_adjust=True, progress=False, timeout=15)
         if df is None or len(df) < 30:
+            return go.Figure()
+        # Fix yfinance MultiIndex columns (newer versions return ticker as extra level)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.droplevel(1)
+        df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
+        df.dropna(subset=["Open", "High", "Low", "Close"], inplace=True)
+        if len(df) < 30:
             return go.Figure()
     except Exception:
         return go.Figure()
