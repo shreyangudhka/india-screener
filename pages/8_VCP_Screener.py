@@ -476,80 +476,59 @@ with st.expander("📖 What is VCP? How to use this screener?", expanded=False):
 # ─────────────────────────────────────────────────────────────────────────────
 
 if scan_clicked:
-    st.session_state["scan_results"] = results if "results" in dir() else []
-
-    # 1. Get stock list
-    with st.spinner("📋 Loading stock universe (NSE + BSE)…"):
-        if UNIVERSE_AVAILABLE:
-            all_stocks = get_all_stocks()
-        else:
-            # Fallback inline list if stocks_universe.py not available
-            nse_fallback = ["RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","HINDUNILVR",
-                "SBIN","BAJFINANCE","BHARTIARTL","ITC","KOTAKBANK","LT","HCLTECH",
-                "ASIANPAINT","AXISBANK","MARUTI","SUNPHARMA","TITAN","ULTRACEMCO",
-                "NTPC","ONGC","POWERGRID","BAJAJFINSV","WIPRO","NESTLEIND","TATAMOTORS",
-                "TECHM","DIVISLAB","ADANIENT","ADANIPORTS","JSWSTEEL","TATASTEEL",
-                "COALINDIA","CIPLA","GRASIM","BRITANNIA","HINDALCO","APOLLOHOSP",
-                "EICHERMOT","DRREDDY","BPCL","INDUSINDBK","HEROMOTOCO","SHREECEM",
-                "SBILIFE","HDFCLIFE","BAJAJ-AUTO","UPL","TATACONSUM","M&M",
-                "KPITTECH","PERSISTENT","LTTS","COFORGE","MPHASIS","HAPPSTMNDS",
-                "TANLA","DEEPAKNITRI","NAVINFLUOR","FINEORG","IRCTC","RVNL",
-                "TATAPOWER","ADANIGREEN","ZOMATO","NYKAA","DMART","SIEMENS",
-                "HAVELLS","PIDILITIND","BERGEPAINT","MUTHOOTFIN","TORNTPHARM",
-                "LUPIN","BIOCON","GLAND","ALKEM","APOLLOTYRE","AMBUJACEM",
-                "SHRIRAMFIN","CHOLAFIN","HDFCAMC","ICICIGI","SBICARD","BANDHANBNK",
-                "FEDERALBNK","IDFCFIRSTB","RBLBANK","GREENPANEL","CENTURYPLY",
-                "POLYCAB","DIXON","AMBER","VGUARD","ASTRAL","FINOLEX",
-                "SUPREMEIND","NILKAMAL","BEL","HAL","BHEL","THERMAX","BEML",
-                "GODREJPROP","OBEROIRLTY","PRESTIGE","PHOENIXLTD","SOBHA",
-                "MANAPPURAM","IIFL","MUTHOOTCAP","UJJIVAN","CREDITACC",
-                "CESC","NHPC","SJVN","SUZLON","INOXWIND","ADANIPOWER",
-                "TATAELXSI","HEXAWARE","SONATASOFT","CYIENT","ZENSAR",
-                "PCBL","ELGI","GRINDWELL","RATNAMANI","IPCALAB","TORNTPOWER"]
-            all_stocks = [{"symbol":s,"name":s,"exchange":"NSE","yf_ticker":f"{s}.NS"}
-                         for s in nse_fallback]
-
-    # 2. Apply exchange filter
-    stocks_to_scan = [s for s in all_stocks
-                      if s.get("exchange", "NSE") in market_filter
-                      and min_price <= (s.get("price", 0) or 0) or True]
-
-    total = len(stocks_to_scan)
-    st.info(f"🔍 Scanning **{total:,} stocks** from: {', '.join(market_filter)}  "
-            f"| Min Score: {min_score}/7  |  This may take several minutes…")
-
-    # 3. Progress containers
-    prog_bar     = st.progress(0)
-    prog_text    = st.empty()
-    results_live = st.empty()
-    found_count  = st.empty()
-
-    results = []
-    scanned = 0
-    skipped = 0
-    errors  = 0
-    start_t = time.time()
-
-
-    def _vcp_wrapper(stock_info: dict, df) -> dict | None:
-        res = fetch_and_score(stock_info, df=df, period=period)
-        if res and res.get("score", 0) >= min_score:
-            price_ok = min_price <= (res.get("current_price") or 0) <= max_price
-            if price_ok:
-                return res
-        return None
-
+    # ── Load cache or run fresh scan ──────────────────────────────────────────
     cached = load_cached_results("vcp", cache_hours=4)
     if cached:
-        st.success(f"⚡ Loaded {len(cached)} VCPs from cache (≤4h old).")
-        results = cached
+        st.success(f"⚡ Loaded **{len(cached)}** VCP results from cache (≤4h old).")
+        st.session_state["scan_results"] = cached
     else:
+        # 1. Get stock list
+        with st.spinner("📋 Loading stock universe (NSE + BSE)…"):
+            if UNIVERSE_AVAILABLE:
+                all_stocks = get_all_stocks()
+            else:
+                nse_fallback = [
+                    "RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","HINDUNILVR",
+                    "SBIN","BAJFINANCE","BHARTIARTL","ITC","KOTAKBANK","LT","HCLTECH",
+                    "ASIANPAINT","AXISBANK","MARUTI","SUNPHARMA","TITAN","ULTRACEMCO",
+                    "NTPC","ONGC","POWERGRID","WIPRO","NESTLEIND","TATAMOTORS",
+                    "TECHM","DIVISLAB","ADANIENT","ADANIPORTS","JSWSTEEL","TATASTEEL",
+                    "CIPLA","BRITANNIA","HINDALCO","APOLLOHOSP","EICHERMOT","DRREDDY",
+                    "BPCL","INDUSINDBK","HEROMOTOCO","BAJAJ-AUTO","TATACONSUM","M&M",
+                    "KPIT","PERSISTENT","LTTS","COFORGE","MPHASIS","HAPPSTMNDS",
+                    "TANLA","DEEPAKNITRI","NAVINFLUOR","FINEORG","IRCTC","RVNL",
+                    "TATAPOWER","ZOMATO","DMART","SIEMENS","HAVELLS","PIDILITIND",
+                    "MUTHOOTFIN","LUPIN","BIOCON","GLAND","ALKEM","AMBUJACEM",
+                    "SHRIRAMFIN","CHOLAFIN","BANDHANBNK","FEDERALBNK","IDFCFIRSTB",
+                    "POLYCAB","DIXON","AMBER","VGUARD","ASTRAL","BEL","HAL","BHEL",
+                    "GODREJPROP","MANAPPURAM","UJJIVAN","TATAELXSI","BALKRISIND",
+                    "COLPAL","DABUR","MARICO","GRANULES","INTELLECT","MASTEK",
+                    "AAVAS","HOMEFIRST","EQUITASBNK","SUPREMEIND","RATNAMANI","PCBL",
+                ]
+                all_stocks = [{"symbol": s, "name": s, "exchange": "NSE", "yf_ticker": f"{s}.NS"}
+                              for s in nse_fallback]
+
+        # 2. Apply exchange filter
+        stocks_to_scan = [s for s in all_stocks if s.get("exchange", "NSE") in market_filter]
+        total = len(stocks_to_scan)
+        st.info(f"🔍 Scanning **{total:,} stocks** from: {', '.join(market_filter)} | Min Score: {min_score}/7")
+
+        # 3. Score wrapper
+        def _vcp_wrapper(stock_info: dict, df) -> dict | None:
+            res = fetch_and_score(stock_info, df=df, period=period)
+            if res and res.get("score", 0) >= min_score:
+                price_ok = min_price <= (res.get("current_price") or 0) <= max_price
+                if price_ok:
+                    return res
+            return None
+
+        # 4. Fast batch scan
         prog_bar  = st.progress(0)
         prog_text = st.empty()
         results = fast_scan_all(
             all_stocks      = stocks_to_scan,
             score_fn        = _vcp_wrapper,
-            exchange_filter = None,       # already filtered above
+            exchange_filter = None,
             min_price       = min_price,
             max_price       = max_price,
             period          = period,
@@ -559,21 +538,19 @@ if scan_clicked:
             cache_key       = "vcp",
             cache_hours     = 4,
         )
-    elapsed_total = time.time() - start_t
-    st.success(f"✅ Scan complete! Found **{len(results)} VCP setups** (Score ≥ {min_score})")
-               f"— Found **{len(results)} VCP setups** (Score ≥ {min_score})")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  DISPLAY RESULTS
-# ─────────────────────────────────────────────────────────────────────────────
-
+        st.session_state["scan_results"] = results
+        st.success(f"✅ Scan complete! Found **{len(results)} VCP setups** (Score ≥ {min_score})")
 
 if st.button("🗑️ Clear cache & re-scan fresh", key="clr_vcp"):
     clear_cache("vcp")
     if "scan_results" in st.session_state:
         del st.session_state["scan_results"]
     st.rerun()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  DISPLAY RESULTS
+# ─────────────────────────────────────────────────────────────────────────────
 
 results = st.session_state.get("scan_results", [])
 
