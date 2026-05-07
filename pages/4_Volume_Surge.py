@@ -5,6 +5,8 @@ import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import warnings
 warnings.filterwarnings('ignore')
+from fast_scan import fast_scan_all, load_cached_results, clear_cache
+
 
 st.set_page_config(page_title="Volume Surge — All NSE+BSE", page_icon="📊", layout="wide")
 
@@ -83,10 +85,10 @@ with st.sidebar:
     st.caption("Not SEBI-registered advice.")
 
 # ── ANALYSIS ──────────────────────────────────────────────────────────────────
-def fetch_and_score(stock_info: dict) -> dict | None:
+def fetch_and_score(stock_info: dict, df=None) -> dict | None:
     ticker = stock_info["yf_ticker"]
     try:
-        df = yf.download(ticker, period="6mo", progress=False, auto_adjust=True, timeout=15)
+        # df is now passed in by fast_scan_all (batch download)
         if df is None or len(df) < 30:
             return None
         if isinstance(df.columns, pd.MultiIndex):
@@ -174,30 +176,40 @@ for col, val, lbl, color in [
         <div class='metric-lbl'>{lbl}</div></div>""", unsafe_allow_html=True)
 st.markdown("---")
 
+
+def _score_fn_wrapper(stock_info: dict, df) -> dict | None:
+    return fetch_and_score(stock_info, df)
+
 if st.button("🔍 Detect volume surges across ALL stocks", use_container_width=True):
-    stocks_to_scan = [s for s in ALL_STOCKS_DATA if s.get("exchange","NSE") in exchange_filter]
-    total = len(stocks_to_scan)
-    st.info(f"Scanning **{total:,} stocks** for volume surges ≥ {vol_threshold}× in last {lookback} days")
+    cached = load_cached_results("volume", cache_hours=4)
+    if cached:
+        st.success(f"⚡ Loaded **{len(cached)}** results from cache (≤4h old). Use 'Clear cache' below to force re-scan.")
+        st.session_state["vol_results"] = cached
+    else:
+        prog   = st.progress(0)
+        status = st.empty()
+        results = fast_scan_all(
+            all_stocks      = ALL_STOCKS_DATA,
+            score_fn        = _score_fn_wrapper,
+            exchange_filter = exchange_filter,
+            min_price       = min_price,
+            max_price       = max_price,
+            period          = "6mo",
+            batch_size      = 50,
+            progress_bar    = prog,
+            status_text     = status,
+            cache_key       = "volume",
+            cache_hours     = 4,
+        )
+        results.sort(key=lambda x: x.get("Score /5", 0), reverse=True)
+        st.session_state["vol_results"] = results
+        st.success(f"✅ Done! Found **{len(results)}** signals.")
 
-    prog, prog_txt = st.progress(0), st.empty()
-    results, scanned = [], 0
-
-    with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futures = {ex.submit(fetch_and_score, s): s for s in stocks_to_scan}
-        for fut in as_completed(futures):
-            scanned += 1
-            try:
-                r = fut.result()
-                if r: results.append(r)
-            except Exception: pass
-            if scanned % 20 == 0 or scanned == total:
-                prog.progress(scanned / total)
-                prog_txt.markdown(f"Scanned **{scanned:,}/{total:,}** | Found: **{len(results)}** surges")
-
-    prog.progress(1.0)
-    results.sort(key=lambda x: x["Score /5"], reverse=True)
-    st.session_state["vol_results"] = results
-    st.success(f"✅ Done! Found **{len(results)}** volume surges from {total:,} stocks.")
+if st.button("🗑️ Clear cache & re-scan fresh", key="clr_volume"):
+    clear_cache("volume")
+    if "vol_results" in st.session_state:
+        del st.session_state["vol_results"]
+    st.rerun()
 
 if "vol_results" in st.session_state:
     res    = st.session_state["vol_results"]
